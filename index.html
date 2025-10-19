@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>O/X 生存問答 - Firebase 版</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; background-color: #f0f2f5; margin: 0; }
+        .container { background: white; padding: 2rem; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); text-align: center; width: 350px; }
+        h1 { color: #333; }
+        .card { border: 1px solid #ddd; border-radius: 8px; padding: 1.5rem; margin-top: 1.5rem; }
+        .card h2 { margin-top: 0; color: #555; font-size: 1.2rem; display: flex; align-items: center; justify-content: center; }
+        .card h2 .icon { font-size: 1.5rem; margin-right: 0.5rem; }
+        input { width: calc(100% - 22px); padding: 10px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 1rem; }
+        button { width: 100%; padding: 12px; border: none; border-radius: 4px; cursor: pointer; font-size: 1rem; font-weight: bold; transition: background-color 0.3s; }
+        button:disabled { background-color: #ccc; }
+        .teacher-btn { background-color: #28a745; color: white; }
+        .teacher-btn:hover:enabled { background-color: #218838; }
+        .student-btn { background-color: #007bff; color: white; }
+        .student-btn:hover:enabled { background-color: #0056b3; }
+        #message { margin-top: 1rem; color: red; font-weight: bold; min-height: 1.2rem; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>O / X 生存問答</h1>
+
+        <div class="card">
+            <h2><span class="icon">👑</span>管理者</h2>
+            <form id="teacher-form">
+                <input type="text" id="game-id" placeholder="請輸入遊戲ID" required>
+                <input type="password" id="password" placeholder="請輸入密碼" required>
+                <button type="submit" class="teacher-btn">建立/管理遊戲</button>
+            </form>
+        </div>
+
+        <div class="card">
+            <h2><span class="icon">👤</span>玩家</h2>
+            <form id="student-form">
+                <input type="text" id="nickname" placeholder="請輸入暱稱" required>
+                <input type="text" id="join-game-id" placeholder="輸入遊戲ID (管理者分享)" required>
+                <button type="submit" class="student-btn">加入現有遊戲</button>
+            </form>
+        </div>
+        <p id="message"></p>
+    </div>
+
+    <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-firestore-compat.js"></script>
+
+    <script>
+        // *** 1. 重要：請在此貼上您的 firebaseConfig 物件 ***
+        const firebaseConfig = {
+            apiKey: "AIzaSyDlSCn-eZViEDT5cNwYtDczTjzb96w01i4",
+            authDomain: "ox-quiz-game-af56c.firebaseapp.com",
+            projectId: "ox-quiz-game-af56c",
+            storageBucket: "ox-quiz-game-af56c.firebasestorage.app",
+            messagingSenderId: "442919957007",
+            appId: "1:442919957007:web:4320d080560f80f806697a"
+        };
+
+        // *** 2. 初始化 Firebase ***
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.firestore();
+
+        // *** 3. 獲取頁面元素 ***
+        const teacherForm = document.getElementById('teacher-form');
+        const studentForm = document.getElementById('student-form');
+        const messageEl = document.getElementById('message');
+        const allButtons = document.querySelectorAll('button');
+
+        function setLoading(isLoading, msg = '') {
+            messageEl.textContent = msg;
+            allButtons.forEach(btn => btn.disabled = isLoading);
+        }
+
+        // *** 4. 管理者登入邏輯 ***
+        teacherForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            setLoading(true, '處理中...');
+            
+            const gameId = document.getElementById('game-id').value.trim();
+            const password = document.getElementById('password').value;
+            const gameRef = db.collection('games').doc(gameId);
+
+            try {
+                const doc = await gameRef.get();
+                if (doc.exists) {
+                    // 遊戲已存在，檢查密碼
+                    if (doc.data().password === password) {
+                        window.location.href = `teacher.html?gameId=${gameId}`;
+                    } else {
+                        setLoading(false, '密碼錯誤！');
+                    }
+                } else {
+                    // 遊戲不存在，建立新遊戲
+                    await gameRef.set({
+                        password: password,
+                        status: 'lobby', // 'lobby', 'active', 'finished'
+                        currentQuestion: 1,
+                        createdAt: new Date()
+                    });
+                    // 同時建立一個空的 'players' 子集合，方便後續操作
+                    await gameRef.collection('players').doc('init').set({});
+                    
+                    window.location.href = `teacher.html?gameId=${gameId}`;
+                }
+            } catch (error) {
+                console.error("管理者登入失敗:", error);
+                setLoading(false, '操作失敗，請檢查網路或聯繫管理員。');
+            }
+        });
+
+        // *** 5. 學生加入邏輯 ***
+        studentForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            setLoading(true, '加入中...');
+
+            const nickname = document.getElementById('nickname').value.trim();
+            const gameId = document.getElementById('join-game-id').value.trim();
+            const gameRef = db.collection('games').doc(gameId);
+
+            try {
+                const gameDoc = await gameRef.get();
+                if (!gameDoc.exists) {
+                    setLoading(false, '找不到這個遊戲ID！');
+                    return;
+                }
+
+                if (gameDoc.data().status !== 'lobby') {
+                    setLoading(false, '遊戲已開始或結束，無法加入。');
+                    return;
+                }
+
+                // 檢查暱稱是否重複
+                const playerRef = gameRef.collection('players').doc(nickname);
+                const playerDoc = await playerRef.get();
+                if (playerDoc.exists) {
+                    setLoading(false, '這個暱稱已被使用，請換一個。');
+                    return;
+                }
+
+                // 將玩家資料寫入 'players' 子集合
+                await playerRef.set({
+                    status: 'active', // 'active', 'eliminated'
+                    lastAnswer: '',
+                    joinedAt: new Date()
+                });
+
+                // 導航到學生頁面
+                window.location.href = `student.html?gameId=${gameId}&nickname=${nickname}`;
+
+            } catch (error) {
+                console.error("學生加入失敗:", error);
+                setLoading(false, '加入失敗，請檢查網路或聯繫管理員。');
+            }
+        });
+    </script>
+
+</body>
+</html>
