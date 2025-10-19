@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>管理者介面 - Firebase 版</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background-color: #f4f4f9; color: #333; padding: 20px; }
+        .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #ddd; padding-bottom: 10px; flex-wrap: wrap; }
+        .header h1 { margin: 0; font-size: 1.5rem; }
+        #game-info { font-size: 1.2rem; font-weight: bold; color: #007bff; }
+        #player-count { background-color: #e9ecef; padding: 5px 10px; border-radius: 5px; }
+        .controls { background-color: #fff; padding: 20px; margin-top: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .controls h2 { margin-top: 0; }
+        button { padding: 10px 20px; font-size: 1rem; cursor: pointer; border: none; border-radius: 5px; color: white; margin: 5px; transition: background-color 0.2s; }
+        button:disabled { background-color: #ccc; cursor: not-allowed; }
+        #start-btn { background-color: #28a745; }
+        #start-btn:hover:enabled { background-color: #218838; }
+        #reset-btn, #reset-confirm-btn { background-color: #dc3545; }
+        #reset-btn:hover:enabled { background-color: #c82333; }
+        .correct-btn { background-color: #17a2b8; }
+        .correct-btn:hover:enabled { background-color: #138496; }
+        #player-grid { display: flex; flex-wrap: wrap; gap: 15px; margin-top: 20px; }
+        .player-card { background-color: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 15px 20px; min-width: 120px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.05); transition: all 0.3s; }
+        .player-card.eliminated { background-color: #6c757d; color: white; border-color: #5a6268; opacity: 0.6; transform: scale(0.95); }
+        .player-name { font-weight: bold; font-size: 1.1rem; }
+        .player-status { font-size: 0.9rem; color: #666; }
+        .player-card.eliminated .player-status { color: #f0f0f0; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>管理者介面</h1>
+        <div>
+            <span id="game-info">遊戲ID: 載入中...</span>
+            <span id="player-count">應參與者: 0</span>
+        </div>
+    </div>
+
+    <div class="controls">
+        <h2>遊戲控制</h2>
+        <div id="lobby-controls">
+            <button id="start-btn">開始遊戲</button>
+        </div>
+        <div id="game-status" style="display: none;">
+            <h3>目前第 <span id="current-question">1</span> 題</h3>
+            <div id="answer-controls">
+                <p>請設定本題正確答案：</p>
+                <button class="correct-btn" data-answer="O">O (圈)</button>
+                <button class="correct-btn" data-answer="X">X (叉)</button>
+            </div>
+        </div>
+        <hr>
+        <button id="reset-btn">重設遊戲</button>
+        <div id="reset-confirmation" style="display: none;">
+            確定要重設遊戲嗎？所有玩家將被移除。
+            <button id="reset-confirm-btn">確定重設</button>
+        </div>
+    </div>
+
+    <h2>參與玩家</h2>
+    <div id="player-grid"></div>
+
+    <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-firestore-compat.js"></script>
+
+    <script>
+        // *** 1. 重要：請在此貼上您的 firebaseConfig 物件 ***
+        const firebaseConfig = {
+            // apiKey: "...",
+            // authDomain: "...",
+            // projectId: "...",
+            // ...
+        };
+
+        // *** 2. 初始化 Firebase ***
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.firestore();
+
+        // *** 3. 獲取頁面元素與 Game ID ***
+        const lobbyControls = document.getElementById('lobby-controls');
+        const gameStatusDiv = document.getElementById('game-status');
+        const currentQuestionEl = document.getElementById('current-question');
+        const playerGrid = document.getElementById('player-grid');
+        const playerCountEl = document.getElementById('player-count');
+        
+        const urlParams = new URLSearchParams(window.location.search);
+        const gameId = urlParams.get('gameId');
+        document.getElementById('game-info').textContent = `遊戲ID: ${gameId}`;
+
+        // Firebase 文件參照
+        const gameRef = db.collection('games').doc(gameId);
+        const playersRef = gameRef.collection('players');
+
+        // *** 4. 即時監聽遊戲狀態 (status, currentQuestion) ***
+        gameRef.onSnapshot((doc) => {
+            if (!doc.exists) {
+                alert('遊戲不存在或已被刪除！');
+                window.location.href = 'index.html';
+                return;
+            }
+            const gameState = doc.data();
+            currentQuestionEl.textContent = gameState.currentQuestion;
+
+            if (gameState.status === 'lobby') {
+                lobbyControls.style.display = 'block';
+                gameStatusDiv.style.display = 'none';
+            } else { // active or finished
+                lobbyControls.style.display = 'none';
+                gameStatusDiv.style.display = 'block';
+            }
+        });
+
+        // *** 5. 即時監聽玩家列表 ***
+        playersRef.onSnapshot((querySnapshot) => {
+            playerGrid.innerHTML = '';
+            // 忽略 'init' 文件
+            const players = querySnapshot.docs.filter(doc => doc.id !== 'init');
+            playerCountEl.textContent = `應參與者: ${players.length}`;
+            
+            players.forEach((doc) => {
+                const player = doc.data();
+                const card = document.createElement('div');
+                card.className = 'player-card';
+                if (player.status === 'eliminated') {
+                    card.classList.add('eliminated');
+                }
+                card.innerHTML = `<div class="player-name">${doc.id}</div><div class="player-status">${player.status === 'active' ? '存活' : '淘汰'}</div>`;
+                playerGrid.appendChild(card);
+            });
+        });
+
+        // *** 6. 遊戲控制按鈕事件 ***
+        
+        // 開始遊戲
+        document.getElementById('start-btn').addEventListener('click', () => {
+            gameRef.update({ status: 'active' });
+        });
+
+        // 設定正確答案
+        document.querySelectorAll('.correct-btn').forEach(button => {
+            button.addEventListener('click', async (e) => {
+                const correctAnswer = e.target.dataset.answer;
+                
+                // 使用批次寫入來確保資料一致性
+                const batch = db.batch();
+                const activePlayersSnapshot = await playersRef.where('status', '==', 'active').get();
+
+                activePlayersSnapshot.forEach(playerDoc => {
+                    const player = playerDoc.data();
+                    const playerRef = playersRef.doc(playerDoc.id);
+                    if (player.lastAnswer !== correctAnswer) {
+                        batch.update(playerRef, { status: 'eliminated' });
+                    }
+                    batch.update(playerRef, { lastAnswer: '' }); // 清空答案
+                });
+                
+                // 更新問題編號
+                batch.update(gameRef, { 
+                    currentQuestion: firebase.firestore.FieldValue.increment(1) 
+                });
+                
+                await batch.commit();
+            });
+        });
+
+        // 重設遊戲
+        document.getElementById('reset-btn').addEventListener('click', () => {
+            document.getElementById('reset-confirmation').style.display = 'block';
+        });
+
+        document.getElementById('reset-confirm-btn').addEventListener('click', async () => {
+            const batch = db.batch();
+            const allPlayersSnapshot = await playersRef.get();
+            
+            allPlayersSnapshot.forEach(doc => {
+                // 不刪除 'init' 文件，確保子集合存在
+                if (doc.id !== 'init') {
+                    batch.delete(playersRef.doc(doc.id));
+                }
+            });
+
+            batch.update(gameRef, {
+                status: 'lobby',
+                currentQuestion: 1
+            });
+            
+            await batch.commit();
+            document.getElementById('reset-confirmation').style.display = 'none';
+        });
+
+    </script>
+</body>
+</html>
