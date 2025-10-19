@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>玩家介面 - Firebase 版</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background-color: #f0f2f5; text-align: center; }
+        .container { background: white; padding: 2rem 4rem; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+        #status-message { font-size: 1.5rem; color: #555; min-height: 2.2rem; }
+        #action-buttons { margin-top: 2rem; display: none; }
+        .answer-btn { width: 150px; height: 150px; font-size: 5rem; font-weight: bold; cursor: pointer; border: 5px solid; border-radius: 15px; margin: 0 20px; transition: all 0.2s; }
+        .answer-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        #btn-o { color: #007bff; border-color: #007bff; background-color: #e7f3ff; }
+        #btn-o:hover:enabled { background-color: #d0e7ff; }
+        #btn-x { color: #dc3545; border-color: #dc3545; background-color: #fbebeb; }
+        #btn-x:hover:enabled { background-color: #f8d7da; }
+        #eliminated-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.85); color: white; display: none; flex-direction: column; justify-content: center; align-items: center; z-index: 10; }
+        #eliminated-overlay h1 { font-size: 4rem; margin: 0; text-shadow: 2px 2px 8px rgba(0,0,0,0.5); }
+        #eliminated-overlay p { font-size: 1.5rem; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2 id="welcome-message"></h2>
+        <div id="status-message">正在連線至遊戲...</div>
+        <div id="action-buttons">
+            <button class="answer-btn" id="btn-o" data-answer="O">O</button>
+            <button class="answer-btn" id="btn-x" data-answer="X">X</button>
+        </div>
+    </div>
+    <div id="eliminated-overlay">
+        <h1>您已被淘汰</h1>
+        <p>請等待下一場遊戲</p>
+    </div>
+    
+    <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-firestore-compat.js"></script>
+
+    <script>
+        // *** 1. 重要：請在此貼上您的 firebaseConfig 物件 ***
+        const firebaseConfig = {
+            apiKey: "AIzaSyDlSCn-eZViEDT5cNwYtDczTjzb96w01i4",
+            authDomain: "ox-quiz-game-af56c.firebaseapp.com",
+            projectId: "ox-quiz-game-af56c",
+            storageBucket: "ox-quiz-game-af56c.firebasestorage.app",
+            messagingSenderId: "442919957007",
+            appId: "1:442919957007:web:4320d080560f80f806697a"
+        };
+
+        // *** 2. 初始化 Firebase ***
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.firestore();
+
+        // *** 3. 獲取頁面元素、Game ID 與 Nickname ***
+        const statusMessage = document.getElementById('status-message');
+        const actionButtons = document.getElementById('action-buttons');
+        const eliminatedOverlay = document.getElementById('eliminated-overlay');
+        const answerBtns = document.querySelectorAll('.answer-btn');
+        let currentQuestion = 0;
+
+        const urlParams = new URLSearchParams(window.location.search);
+        const gameId = urlParams.get('gameId');
+        const nickname = urlParams.get('nickname');
+
+        document.getElementById('welcome-message').textContent = `歡迎, ${nickname}!`;
+
+        // Firebase 文件參照
+        const gameRef = db.collection('games').doc(gameId);
+        const playerRef = gameRef.collection('players').doc(nickname);
+        let unsubGame, unsubPlayer; // 用於儲存監聽器，以便之後取消
+
+        // *** 4. 監聽遊戲主狀態 (status, currentQuestion) ***
+        unsubGame = gameRef.onSnapshot((doc) => {
+            if (!doc.exists) return; // 遊戲不存在時不處理
+
+            const gameState = doc.data();
+            
+            // 只有在遊戲進行中才顯示作答按鈕
+            if (gameState.status === 'active') {
+                statusMessage.textContent = `第 ${gameState.currentQuestion} 題，請作答！`;
+                actionButtons.style.display = 'block';
+
+                // 如果是新的一題，重置按鈕
+                if (currentQuestion !== gameState.currentQuestion) {
+                    currentQuestion = gameState.currentQuestion;
+                    answerBtns.forEach(btn => btn.disabled = false);
+                }
+            } else { // lobby or finished
+                statusMessage.textContent = '請等待老師開始遊戲...';
+                actionButtons.style.display = 'none';
+            }
+        });
+
+        // *** 5. 監聽玩家自身狀態 (status) ***
+        unsubPlayer = playerRef.onSnapshot((doc) => {
+            if (!doc.exists) {
+                // 如果找不到自己的資料，可能是被老師重設遊戲了
+                statusMessage.textContent = '您已離線或遊戲已重設';
+                actionButtons.style.display = 'none';
+                // 取消所有監聽
+                if (unsubGame) unsubGame();
+                if (unsubPlayer) unsubPlayer();
+                return;
+            }
+
+            const myState = doc.data();
+            if (myState.status === 'eliminated') {
+                eliminatedOverlay.style.display = 'flex';
+                // 被淘汰後也取消監聽，節省資源
+                if (unsubGame) unsubGame();
+                if (unsubPlayer) unsubPlayer();
+            }
+        });
+
+        // *** 6. 提交答案的按鈕事件 ***
+        answerBtns.forEach(button => {
+            button.addEventListener('click', async (e) => {
+                const answer = e.target.dataset.answer;
+                answerBtns.forEach(btn => btn.disabled = true);
+                statusMessage.textContent = `您回答了「${answer}」，等待老師公佈答案...`;
+                
+                try {
+                    // 更新自己的 'lastAnswer' 欄位
+                    await playerRef.update({ lastAnswer: answer });
+                } catch (error) {
+                    console.error("提交答案失敗:", error);
+                    statusMessage.textContent = '提交失敗，請重試！';
+                    answerBtns.forEach(btn => btn.disabled = false); // 讓玩家可以重試
+                }
+            });
+        });
+
+    </script>
+</body>
+</html>
